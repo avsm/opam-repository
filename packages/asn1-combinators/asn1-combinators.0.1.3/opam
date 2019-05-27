@@ -18,13 +18,12 @@ depends: [
   "ocamlfind" {build}
   "ocamlbuild" {build}
   "topkg" {build}
-  "cstruct" {>= "1.2.0"}
+  "cstruct" {>= "1.2.0" & <"5.0.0"}
   "result"
   "zarith"
   "ounit" {with-test}
 ]
-conflicts: [ "cstruct" {< "1.2.0"} 
-             "base-implicits" ]
+conflicts: [ "base-implicits" ]
 synopsis: "Define ASN.1 grammars in OCaml"
 description: """
 asn1-combinators is a library for declarative definitions of ASN.1 grammars,
