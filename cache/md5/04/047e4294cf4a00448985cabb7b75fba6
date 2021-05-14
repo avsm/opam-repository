@@ -1,0 +1,1638 @@
+diff --git a/.depend b/.depend
+index 9b6b9ff..c845f3e 100644
+--- a/.depend
++++ b/.depend
+@@ -86,7 +86,7 @@ parsing/printast.cmx : parsing/parsetree.cmi utils/misc.cmx \
+ parsing/syntaxerr.cmo : parsing/location.cmi parsing/syntaxerr.cmi
+ parsing/syntaxerr.cmx : parsing/location.cmx parsing/syntaxerr.cmi
+ typing/annot.cmi : parsing/location.cmi
+-typing/btype.cmi : typing/types.cmi typing/path.cmi parsing/asttypes.cmi
++typing/btype.cmi : typing/types.cmi typing/path.cmi parsing/asttypes.cmi typing/typedtree.cmi
+ typing/cmi_format.cmi : typing/types.cmi
+ typing/cmt_format.cmi : typing/types.cmi typing/typedtree.cmi \
+     parsing/location.cmi typing/env.cmi typing/cmi_format.cmi
+diff --git a/driver/main.ml b/driver/main.ml
+index f8358a0..a5ab84b 100644
+--- a/driver/main.ml
++++ b/driver/main.ml
+@@ -85,6 +85,7 @@ module Options = Main_args.Make_bytecomp_options (struct
+   let _custom = set custom_runtime
+   let _dllib s = dllibs := Misc.rev_split_words s @ !dllibs
+   let _dllpath s = dllpaths := !dllpaths @ [s]
++  let _easy = set easy
+   let _for_pack s = for_package := Some s
+   let _g = set debug
+   let _i () = print_types := true; compile_only := true
+diff --git a/driver/main_args.ml b/driver/main_args.ml
+index 4f9668c..d1c4fa2 100644
+--- a/driver/main_args.ml
++++ b/driver/main_args.ml
+@@ -73,6 +73,10 @@ let mk_dtypes f =
+   "-dtypes", Arg.Unit f, " (deprecated) same as -annot"
+ ;;
+ 
++let mk_easy f =
++  "-easy", Arg.Unit f, " more informative typing errors"
++;;
++
+ let mk_for_pack_byt f =
+   "-for-pack", Arg.String f,
+   "<ident>  Generate code that can later be `packed' with\n\
+@@ -469,6 +473,7 @@ let mk__ f =
+ 
+ module type Common_options = sig
+   val _absname : unit -> unit
++  val _easy : unit -> unit
+   val _I : string -> unit
+   val _labels : unit -> unit
+   val _no_alias_deps : unit -> unit
+@@ -616,6 +621,7 @@ module Make_bytecomp_options (F : Bytecomp_options) =
+ struct
+   let list = [
+     mk_a F._a;
++    mk_easy F._easy;
+     mk_absname F._absname;
+     mk_annot F._annot;
+     mk_binannot F._binannot;
+@@ -693,6 +699,7 @@ module Make_bytetop_options (F : Bytetop_options) =
+ struct
+   let list = [
+     mk_absname F._absname;
++    mk_easy F._easy;
+     mk_I F._I;
+     mk_init F._init;
+     mk_labels F._labels;
+@@ -735,6 +742,7 @@ module Make_optcomp_options (F : Optcomp_options) =
+ struct
+   let list = [
+     mk_a F._a;
++    mk_easy F._easy;
+     mk_absname F._absname;
+     mk_annot F._annot;
+     mk_binannot F._binannot;
+@@ -821,6 +829,7 @@ end;;
+ module Make_opttop_options (F : Opttop_options) = struct
+   let list = [
+     mk_absname F._absname;
++    mk_easy F._easy;
+     mk_compact F._compact;
+     mk_I F._I;
+     mk_init F._init;
+diff --git a/driver/main_args.mli b/driver/main_args.mli
+index 95b7c69..adc95f1 100644
+--- a/driver/main_args.mli
++++ b/driver/main_args.mli
+@@ -12,6 +12,7 @@
+ 
+ module type Common_options = sig
+   val _absname : unit -> unit
++  val _easy : unit -> unit
+   val _I : string -> unit
+   val _labels : unit -> unit
+   val _no_alias_deps : unit -> unit
+diff --git a/driver/optmain.ml b/driver/optmain.ml
+index 947d430..547073f 100644
+--- a/driver/optmain.ml
++++ b/driver/optmain.ml
+@@ -82,6 +82,7 @@ module Options = Main_args.Make_optcomp_options (struct
+   let _ccopt s = first_ccopts := s :: !first_ccopts
+   let _compact = clear optimize_for_speed
+   let _config () = show_config ()
++  let _easy = set easy
+   let _for_pack s = for_package := Some s
+   let _g = set debug
+   let _i () = print_types := true; compile_only := true
+diff --git a/tools/ocamlcp.ml b/tools/ocamlcp.ml
+index 51559ae..1c2561c 100644
+--- a/tools/ocamlcp.ml
++++ b/tools/ocamlcp.ml
+@@ -54,6 +54,7 @@ module Options = Main_args.Make_bytecomp_options (struct
+   let _dllib = option_with_arg "-dllib"
+   let _dllpath = option_with_arg "-dllpath"
+   let _dtypes = option "-dtypes"
++  let _easy = option "-easy"
+   let _for_pack = option_with_arg "-for-pack"
+   let _g = option "-g"
+   let _i = option "-i"
+diff --git a/tools/ocamloptp.ml b/tools/ocamloptp.ml
+index 0b78884..2b8bdda 100644
+--- a/tools/ocamloptp.ml
++++ b/tools/ocamloptp.ml
+@@ -57,6 +57,7 @@ module Options = Main_args.Make_optcomp_options (struct
+   let _g = option "-g"
+   let _i = option "-i"
+   let _I s = option_with_arg "-I" s
++  let _easy = option "-easy"
+   let _impl s = with_impl := true; option_with_arg "-impl" s
+   let _inline n = option_with_int "-inline" n
+   let _intf s = with_intf := true; option_with_arg "-intf" s
+diff --git a/toplevel/opttopmain.ml b/toplevel/opttopmain.ml
+index 51d1daa..fcb64e1 100644
+--- a/toplevel/opttopmain.ml
++++ b/toplevel/opttopmain.ml
+@@ -66,6 +66,7 @@ module Options = Main_args.Make_opttop_options (struct
+   let _I dir =
+     let dir = Misc.expand_directory Config.standard_library dir in
+     include_dirs := dir :: !include_dirs
++  let _easy = true
+   let _init s = init_file := Some s
+   let _inline n = inline_threshold := n * 8
+   let _labels = clear classic
+diff --git a/toplevel/topmain.ml b/toplevel/topmain.ml
+index d1dbeca..397d23b 100644
+--- a/toplevel/topmain.ml
++++ b/toplevel/topmain.ml
+@@ -64,6 +64,7 @@ module Options = Main_args.Make_bytetop_options (struct
+   let _I dir =
+     let dir = Misc.expand_directory Config.standard_library dir in
+     include_dirs := dir :: !include_dirs
++  let _easy = set easy
+   let _init s = init_file := Some s
+   let _noinit = set noinit
+   let _labels = clear classic
+diff --git a/typing/btype.ml b/typing/btype.ml
+index c1228f6..f07ccb1 100644
+--- a/typing/btype.ml
++++ b/typing/btype.ml
+@@ -563,6 +563,17 @@ let rec extract_label_aux hd l = function
+ 
+ let extract_label l ls = extract_label_aux [] l ls
+ 
++(* Note: copy paste from above, with slight generalization *)
++
++let rec extract_label_aux_easy hd hd_tys l ls tys =
++  match ls,tys with
++    [], [] -> raise Not_found
++  | (l',t as p) :: ls, ty::tys ->
++      if label_name l' = l then (l', t, ty, List.rev hd, List.rev hd_tys, ls, tys)
++      else extract_label_aux_easy (p::hd) (ty::hd_tys) l ls tys
++  | _ -> assert false
++
++let extract_label_easy l ls tys = extract_label_aux_easy [] [] l ls tys
+ 
+                   (**********************************)
+                   (*  Utilities for backtracking    *)
+diff --git a/typing/btype.mli b/typing/btype.mli
+index e770fa6..81fa13c 100644
+--- a/typing/btype.mli
++++ b/typing/btype.mli
+@@ -173,6 +173,11 @@ val extract_label :
+     label * 'a * (label * 'a) list * (label * 'a) list
+     (* actual label, value, before list, after list *)
+ 
++val extract_label_easy :
++    label -> (label * 'a) list -> Typedtree.expression list ->
++    label * 'a * Typedtree.expression * (label * 'a) list * Typedtree.expression list * (label * 'a) list * Typedtree.expression list
++
++
+ (**** Utilities for backtracking ****)
+ 
+ type snapshot
+diff --git a/typing/ctype.ml b/typing/ctype.ml
+index 78852a4..84e8925 100644
+--- a/typing/ctype.ml
++++ b/typing/ctype.ml
+@@ -17,6 +17,9 @@ open Asttypes
+ open Types
+ open Btype
+ 
++(* Global flag to activate easytype typing mode *)
++let activate_easytype = ref false
++
+ (*
+    Type manipulation after type inference
+    ======================================
+diff --git a/typing/ctype.mli b/typing/ctype.mli
+index 37daf3a..6dd3a08 100644
+--- a/typing/ctype.mli
++++ b/typing/ctype.mli
+@@ -15,6 +15,9 @@
+ open Asttypes
+ open Types
+ 
++(* Global flag to activate easytype typing mode *)
++val activate_easytype : bool ref
++
+ exception Unify of (type_expr * type_expr) list
+ exception Tags of label * label
+ exception Subtype of
+diff --git a/typing/printtyp.ml b/typing/printtyp.ml
+index 920c28b..7b79d6a 100644
+--- a/typing/printtyp.ml
++++ b/typing/printtyp.ml
+@@ -22,6 +22,9 @@ open Types
+ open Btype
+ open Outcometree
+ 
++let hack_to_display_message_at_the_right_place_easy =
++  ref false
++
+ (* Print a long identifier *)
+ 
+ let rec longident ppf = function
+@@ -1304,9 +1307,25 @@ let print_tags ppf fields =
+       fprintf ppf "`%s" t;
+       List.iter (fun (t, _) -> fprintf ppf ",@ `%s" t) fields
+ 
++(* AC: TODO: get rid of this function and have get_explanation return an option *)
+ let has_explanation unif t3 t4 =
+   match t3.desc, t4.desc with
+-    Tfield _, (Tnil|Tconstr _) | (Tnil|Tconstr _), Tfield _
++  (* case added for easytype *)
++  | (Tconstr (p, [ty1], _), ty2 | ty2, Tconstr (p, [ty1], _)) 
++     when !activate_easytype && 
++          (match p with Pdot(Pident id, "ref", pos) 
++           when Ident.same id ident_pervasive -> true | _ -> false) 
++     -> hack_to_display_message_at_the_right_place_easy := true; 
++        true
++  (* case added for easytype *)
++  | (Tarrow (_, ty1, _, _), ty2 | ty2, Tarrow (_, ty1, _, _)) 
++     when (*AC: could also generalize to: (expand_head env ty1).desc *) 
++       !activate_easytype && 
++       (match ty1.desc with Tconstr (p,_,_) when Path.same p Predef.path_unit -> true | _ -> false)
++     -> hack_to_display_message_at_the_right_place_easy := true;
++        true
++
++  | Tfield _, (Tnil|Tconstr _) | (Tnil|Tconstr _), Tfield _
+   | Tnil, Tconstr _ | Tconstr _, Tnil
+   | _, Tvar _ | Tvar _, _
+   | Tvariant _, Tvariant _ -> true
+@@ -1325,6 +1344,22 @@ let rec mismatch unif = function
+ 
+ let explanation unif t3 t4 ppf =
+   match t3.desc, t4.desc with
++  (* case added for easytype;
++     AC--TODO: apply the case only when ty1 is unifiable with ty2,
++     however do so without performing any side-effects on them. *)
++  | (Tconstr (p, [ty1], _), ty2 | ty2, Tconstr (p, [ty1], _)) 
++     when !activate_easytype && 
++          (match p with Pdot(Pident id, "ref", pos) 
++           when Ident.same id ident_pervasive -> true | _ -> false) ->
++      fprintf ppf
++        "@,@[You probably forgot a `!' operator somewhere.@]"
++  (* case added for easytype *)
++  | (Tarrow (_, ty1, _, _), ty2 | ty2, Tarrow (_, ty1, _, _)) 
++     when !activate_easytype && 
++       (*AC: could also generalize to: (expand_head env ty1).desc *) 
++       (match ty1.desc with Tconstr (p,_,_) when Path.same p Predef.path_unit -> true | _ -> false) ->
++      fprintf ppf
++        "@,@[You probably forgot to provide `()' as argument somewhere.@]"
+   | Ttuple [], Tvar _ | Tvar _, Ttuple [] ->
+       fprintf ppf "@,Self type cannot escape its class"
+   | Tconstr (p, tl, _), Tvar _
+@@ -1428,10 +1463,11 @@ let unification_error unif tr txt1 ppf txt2 =
+       and t2, t2' = may_prepare_expansion (tr = []) t2 in
+       print_labels := not !Clflags.classic;
+       let tr = List.map prepare_expansion tr in
++      (* AC: added a dot at the end of the sentence. *)
+       fprintf ppf
+         "@[<v>\
+           @[%t@;<1 2>%a@ \
+-            %t@;<1 2>%a\
++            %t@;<1 2>%a.\
+           @]%a%t\
+          @]"
+         txt1 (type_expansion t1) t1'
+@@ -1448,6 +1484,36 @@ let report_unification_error ppf env ?(unif=true)
+   wrap_printing_env env (fun () -> unification_error unif tr txt1 ppf txt2)
+ ;;
+ 
++
++type easy_error_piece = formatter -> unit -> unit
++
++(* Note: some code copy-pasted from original function *)
++let get_unification_error_easy env ?(unif=true) tr =
++  wrap_printing_env env (fun () ->
++    reset ();
++    trace_same_names tr;
++    let tr = List.map (fun (t, t') -> (t, hide_variant_name t')) tr in
++    let mis = mismatch unif tr in
++    match tr with
++    | [] | _ :: [] -> assert false
++    | t1 :: t2 :: tr ->
++      try
++        let tr = filter_trace (mis = None) tr in
++        let t1, t1' = may_prepare_expansion (tr = []) t1
++        and t2, t2' = may_prepare_expansion (tr = []) t2 in
++        print_labels := not !Clflags.classic;
++        let tr = List.map prepare_expansion tr in
++        let m1 = fun ppf () -> ((type_expansion t1) ppf t1') in
++        let m2 = fun ppf () -> ((type_expansion t2) ppf t2') in
++        let m3 = fun ppf () -> ((trace false "is not compatible with type") ppf tr) in
++        let m4 = fun ppf () -> fprintf ppf "%t" ((explanation unif mis)) in
++        print_labels := true;
++        (m1,m2,m3,m4)
++      with exn ->
++        print_labels := true;
++        raise exn
++  )
++
+ let trace fst keep_last txt ppf tr =
+   print_labels := not !Clflags.classic;
+   trace_same_names tr;
+diff --git a/typing/printtyp.mli b/typing/printtyp.mli
+index b58b854..23c610d 100644
+--- a/typing/printtyp.mli
++++ b/typing/printtyp.mli
+@@ -72,6 +72,10 @@ val report_unification_error:
+     formatter -> Env.t -> ?unif:bool -> (type_expr * type_expr) list ->
+     (formatter -> unit) -> (formatter -> unit) ->
+     unit
++type easy_error_piece = formatter -> unit -> unit
++val get_unification_error_easy:
++    Env.t -> ?unif:bool -> (type_expr * type_expr) list ->
++    (easy_error_piece * easy_error_piece * easy_error_piece * easy_error_piece)
+ val report_subtyping_error:
+     formatter -> Env.t -> (type_expr * type_expr) list ->
+     string -> (type_expr * type_expr) list -> unit
+@@ -81,3 +85,5 @@ val report_ambiguous_type_error:
+ 
+ (* for toploop *)
+ val hide_rec_items: signature_item list -> unit
++
++val hack_to_display_message_at_the_right_place_easy : bool ref
+diff --git a/typing/typecore.ml b/typing/typecore.ml
+index 16a310d..1f913a9 100644
+--- a/typing/typecore.ml
++++ b/typing/typecore.ml
+@@ -20,6 +20,17 @@ open Typedtree
+ open Btype
+ open Ctype
+ 
++(* AC: TODO: type trace = (type_expr * type_expr) list *)
++
++(* Flag to control the behavior of error reporting 
++   on application, whether or not to show the original
++   ocaml error message *)
++let show_original_error_after_easy = false
++
++
++type easy_error_piece = Printtyp.easy_error_piece
++type easy_reporter = Format.formatter -> (easy_error_piece * easy_error_piece * easy_error_piece * easy_error_piece) -> unit
++
+ type error =
+     Polymorphic_label of Longident.t
+   | Constructor_arity_mismatch of Longident.t * int * int
+@@ -29,6 +40,8 @@ type error =
+   | Multiply_bound_variable of string
+   | Orpat_vars of Ident.t
+   | Expr_type_clash of (type_expr * type_expr) list
++  | Expr_type_clash_easy of easy_reporter * (type_expr * type_expr) list
++  | Apply_error_easy of (Format.formatter -> unit) * Location.t * error
+   | Apply_non_function of type_expr
+   | Apply_wrong_label of label * type_expr
+   | Label_multiply_defined of string
+@@ -110,6 +123,50 @@ let rp node =
+   node
+ ;;
+ 
++(* Add a dummy prefix to a name in order to help track missing "rec" keywords *)
++let ghost_name_easy s =
++  "***" ^ s
++
++(* Add a dummy prefix to an ident in order to help track missing "rec" keywords *)
++let ghost_ident_easy id =
++  { id with Ident.name = ghost_name_easy (Ident.name id) }
++
++(* Helper for printing function *)
++let format_fprintf_list ppf sep print_item items =
++  let rec aux = function
++    | [] -> ()
++    | [x] -> print_item ppf x
++    | x::ls -> print_item ppf x; sep ppf; aux ls
++    in
++  aux items
++
++(* Helper for printing plural forms *)
++
++let plural ls =
++  if List.length ls > 1 then "s" else ""
++
++(* Helper for printing type *)
++let format_type ppf ty =
++  Format.fprintf ppf "@[[%a]@]" Printtyp.type_expr ty
++
++(* Helper for printing possibly-labelled type *)
++let format_labelled_type ppf (l,ty) =
++  if l = "" then 
++    format_type ppf ty 
++  else 
++    let lab = if is_optional l then l else ("~" ^ l) in
++    Format.fprintf ppf "@[%s[%a]@]" lab Printtyp.type_expr ty
++
++(* Helper for decomposing an arrow type; returns list of argument types, and return type *)
++
++let decompose_function_type env ty =
++  let rec aux acc ty =
++    match (expand_head env ty).desc with
++    | Tarrow (l, ty_arg, ty_fun, com) -> aux ((l,ty_arg)::acc) ty_fun
++    | _ -> (List.rev acc, ty)
++    in
++  aux [] ty
++
+ 
+ let fst3 (x, _, _) = x
+ let snd3 (_,x,_) = x
+@@ -1251,7 +1308,8 @@ let rec iter3 f lst1 lst2 lst3 =
+   | _ ->
+       assert false
+ 
+-let add_pattern_variables ?check ?check_as env =
++(* Note: modified to also return "pv" *)
++let add_pattern_variables_general ?check ?check_as env =
+   let pv = get_ref pattern_variables in
+   (List.fold_right
+      (fun (id, ty, name, loc, as_var) env ->
+@@ -1262,7 +1320,24 @@ let add_pattern_variables ?check ?check_as env =
+          } env
+      )
+      pv env,
+-   get_ref module_variables)
++   get_ref module_variables, pv)
++
++let add_pattern_variables ?check ?check_as env =
++  let (x,y,_) = add_pattern_variables_general ?check ?check_as env in
++  (x,y)
++
++(* Note: similar to the above, except using ghost names *)
++let add_pattern_variables_ghost_easy ?check ?check_as env pv =
++  (List.fold_right
++     (fun (id, ty, name, loc, as_var) env ->
++       let check = if as_var then check_as else check in
++       Env.add_value ?check (ghost_ident_easy id)
++         {val_type = ty; val_kind = Val_reg; Types.val_loc = loc;
++          val_attributes = [];
++         } env
++     )
++     pv env,
++    get_ref module_variables)
+ 
+ let type_pattern ~lev env spat scope expected_ty =
+   reset_pattern scope true;
+@@ -1274,12 +1349,13 @@ let type_pattern ~lev env spat scope expected_ty =
+       ~check_as:(fun s -> Warnings.Unused_var s) in
+   (pat, new_env, get_ref pattern_force, unpacks)
+ 
++(* Note: modified to also return pv *)
+ let type_pattern_list env spatl scope expected_tys allow =
+   reset_pattern scope allow;
+   let new_env = ref env in
+   let patl = List.map2 (type_pat new_env) spatl expected_tys in
+-  let new_env, unpacks = add_pattern_variables !new_env in
+-  (patl, new_env, get_ref pattern_force, unpacks)
++  let new_env, unpacks, pv = add_pattern_variables_general !new_env in
++  (patl, new_env, get_ref pattern_force, unpacks, pv)
+ 
+ let type_class_arg_pattern cl_num val_env met_env l spat =
+   reset_pattern None false;
+@@ -1738,7 +1814,7 @@ and type_expect ?in_function env sexp ty_expected =
+ 
+ and type_expect_ ?in_function env sexp ty_expected =
+   let loc = sexp.pexp_loc in
+-  (* Record the expression type before unifying it with the expected type *)
++  (* Record this expression type before unifying it with the expected type *)
+   let rue exp =
+     unify_exp env (re exp) (instance env ty_expected);
+     exp
+@@ -1746,7 +1822,32 @@ and type_expect_ ?in_function env sexp ty_expected =
+   match sexp.pexp_desc with
+   | Pexp_ident lid ->
+       begin
+-        let (path, desc) = Typetexp.find_value env loc lid.txt in
++        let (path, desc) = 
++          if not !activate_easytype then 
++            Typetexp.find_value env loc lid.txt
++          else
++            begin
++            try Typetexp.find_value env loc lid.txt
++            with | (Typetexp.Error (loc', env', Typetexp.Unbound_value lid')) as error ->
++              (* try to see if "rec" keyword has been forgotten *)
++              begin
++                let ghost_lidtxt =
++                  match lid.txt with
++                  | Longident.Lident s -> Longident.Lident (ghost_name_easy s)
++                  | _ -> raise error
++                  in
++             let (path, desc) = 
++                begin 
++                try Typetexp.find_value env loc ghost_lidtxt
++                with Typetexp.Error (_, _, Typetexp.Unbound_value _) -> raise error 
++                end
++                in
++              let loc = desc.val_loc in
++              raise (Typetexp.Error (loc', env', Typetexp.Unbound_value_missing_rec_easy (lid', loc)))
++              end
++            end
++          in
++
+         if !Clflags.annotations then begin
+           let dloc = desc.Types.val_loc in
+           let annot =
+@@ -1837,7 +1938,8 @@ and type_expect_ ?in_function env sexp ty_expected =
+       let (pat_exp_list, new_env, unpacks) =
+         type_let env rec_flag spat_sexp_list scp true in
+       let body =
+-        type_expect new_env (wrap_unpacks sbody unpacks) ty_expected in
++        type_expect_easify new_env (wrap_unpacks sbody unpacks) ty_expected
++          (easy_report_but_string "The body of this let-expression is required by the context to have type") in
+       re {
+         exp_desc = Texp_let(rec_flag, pat_exp_list, body);
+         exp_loc = loc; exp_extra = [];
+@@ -1873,7 +1975,9 @@ and type_expect_ ?in_function env sexp ty_expected =
+           (Exp.let_ ~loc Nonrecursive ~attrs:[mknoloc "#default",PStr []]
+              [Vb.mk spat smatch] sexp)
+       in
+-      type_expect ?in_function env sfun ty_expected
++      type_expect_easify ?in_function env sfun ty_expected
++        (easy_report_but_string "The body of this function is required by the context to have type")
++
+         (* TODO: keep attributes, call type_function directly *)
+   | Pexp_fun (l, None, spat, sexp) ->
+       type_function ?in_function loc sexp.pexp_attributes env ty_expected
+@@ -1881,6 +1985,94 @@ and type_expect_ ?in_function env sexp ty_expected =
+   | Pexp_function caselist ->
+       type_function ?in_function
+         loc sexp.pexp_attributes env ty_expected "" caselist
++  | Pexp_apply(sfunct, sargs) when !activate_easytype && not (  (* printf instance *)
++         match sfunct.pexp_desc with
++         | Pexp_ident lid -> 
++            begin match lid.txt with 
++            (* "Printf" || s = "Format" || s = "Scanf" *)
++            | (Longident.Lident s | Longident.Ldot (_, s)) when s = "sprintf" || s = "fprintf" || s = "printf" || s = "sscanf" || s = "fscanf" || s = "scanf" -> true
++            | _ -> false end
++         | _ -> false) ->
++      begin_def ();
++      let funct = type_exp env sfunct in
++      end_def ();
++      let funct_sch = funct.exp_type in
++      generalize funct_sch;
++      let ty = instance env funct_sch in 
++      let funct = { funct with exp_type = ty } in
++      (* DEBUG:
++      Format.printf "a: [%a].\n" Printtyp.type_expr ty;
++      Format.printf "a: [%a].\n" Printtyp.type_expr funct_sch;
++      unify env ty funct_sch;
++      Format.printf "a: [%a].\n" Printtyp.type_expr ty;
++      Format.printf "a: [%a].\n" Printtyp.type_expr funct_sch;
++      *)
++      
++      (* probably not needed in easy mode *)
++      let rec lower_args seen ty_fun =
++        let ty = expand_head env ty_fun in
++        if List.memq ty seen then () else
++        match ty.desc with
++          Tarrow (l, ty_arg, ty_fun, com) ->
++            (try unify_var env (newvar()) ty_arg with Unify _ -> assert false);
++            lower_args (ty::seen) ty_fun
++        | _ -> ()
++      in
++      wrap_trace_gadt_instances env (lower_args []) ty;
++      (* save the type of the arguments *)
++      let save_arg_type (l,arg) =
++        begin_def ();
++        let targ = type_exp env arg in
++        end_def ();
++        let tyarg = targ.exp_type in
++        generalize tyarg;
++        let targ = { targ with exp_type = instance env tyarg } in
++        (targ,(l,tyarg))
++        in
++      let (targs,provided_ltys) = List.split (List.map save_arg_type sargs) in
++      begin_def ();
++      let (args, ty_res) = 
++        begin try 
++          type_application_easy env funct sargs targs
++        with (Error(loc', env', err')) ->
++          let explain ppf = 
++            let expected_ltys, return_ty = decompose_function_type env funct_sch in
++            let show_func_name ppf () = 
++              match sfunct.pexp_desc with
++              | Pexp_ident lid -> 
++                  Format.fprintf ppf " `";
++                  format_fprintf_list ppf (fun ppf -> Format.fprintf ppf ".") (fun pff s -> Format.fprintf ppf "%s" s) (Longident.flatten lid.txt);
++                  Format.fprintf ppf "'";
++              | _ -> ()
++              in
++            let show_count ls =
++              let nb = List.length ls in
++              if nb = 1 then "one" else string_of_int nb
++              in
++            let show_type_list ltys =
++              format_fprintf_list ppf (fun ppf -> Format.fprintf ppf "@, and ") format_labelled_type ltys in
++            if expected_ltys = [] then begin
++              Format.fprintf ppf "@[The expression%a has type %a.@, It is not a function" show_func_name ()  format_type funct_sch;
++            end else begin
++              Format.fprintf ppf "@[The function%a expects %s argument%s of type%s @," show_func_name ()  (show_count expected_ltys) (plural expected_ltys) (plural expected_ltys);
++              show_type_list expected_ltys;
++            end;
++            Format.fprintf ppf ", @,but it is given %s argument%s of type%s @," (show_count provided_ltys) (plural provided_ltys) (plural provided_ltys);
++            show_type_list provided_ltys;
++            Format.fprintf ppf ".@.@]";
++            in
++          raise (Error ((*loc*) funct.exp_loc, env, Apply_error_easy (explain, loc', err')))
++        end in
++      end_def ();
++      unify_var env (newvar()) funct.exp_type;
++      let exp = {
++        exp_desc = Texp_apply(funct, args);
++        exp_loc = loc; exp_extra = [];
++        exp_type = ty_res;
++        exp_attributes = sexp.pexp_attributes;
++        exp_env = env } in
++      unify_exp_easy env (re exp) (instance env ty_expected) 
++        (easy_report_but_string "The result of the function application is required by the context to have type")
+   | Pexp_apply(sfunct, sargs) ->
+       if sargs = [] then
+         Syntaxerr.ill_formed_ast loc "Function application with no argument.";
+@@ -1933,9 +2125,9 @@ and type_expect_ ?in_function env sexp ty_expected =
+          empty pattern matching can be generated by Camlp4 with its
+          revised syntax.  Let's accept it for backward compatibility. *)
+       let val_cases, partial =
+-        type_cases env arg.exp_type ty_expected true loc val_caselist in
++        type_cases_easify env arg.exp_type ty_expected true loc val_caselist in
+       let exn_cases, _ =
+-        type_cases env Predef.type_exn ty_expected false loc exn_caselist in
++        type_cases_easify env Predef.type_exn ty_expected false loc exn_caselist in
+       re {
+         exp_desc = Texp_match(arg, val_cases, exn_cases, partial);
+         exp_loc = loc; exp_extra = [];
+@@ -1945,7 +2137,7 @@ and type_expect_ ?in_function env sexp ty_expected =
+   | Pexp_try(sbody, caselist) ->
+       let body = type_expect env sbody ty_expected in
+       let cases, _ =
+-        type_cases env Predef.type_exn ty_expected false loc caselist in
++        type_cases_easify env Predef.type_exn ty_expected false loc caselist in
+       re {
+         exp_desc = Texp_try(body, cases);
+         exp_loc = loc; exp_extra = [];
+@@ -2147,17 +2339,52 @@ and type_expect_ ?in_function env sexp ty_expected =
+         exp_attributes = sexp.pexp_attributes;
+         exp_env = env }
+   | Pexp_ifthenelse(scond, sifso, sifnot) ->
+-      let cond = type_expect env scond Predef.type_bool in
++      let cond = type_expect_easify env scond Predef.type_bool 
++         (easy_report_so_but_string "This expression is the condition of a if-statement") in
+       begin match sifnot with
+         None ->
+-          let ifso = type_expect env sifso Predef.type_unit in
++          let ifso = type_expect_easify env sifso Predef.type_unit 
++            (easy_report_so_but_string "This expression is the result of a conditional with no else branch") in
+           rue {
+             exp_desc = Texp_ifthenelse(cond, ifso, None);
+             exp_loc = loc; exp_extra = [];
+             exp_type = ifso.exp_type;
+             exp_attributes = sexp.pexp_attributes;
+             exp_env = env }
+-      | Some sifnot ->
++      | Some sifnot when !activate_easytype ->
++          let scheme_exp env sexp =
++            begin_def ();
++            let exp = type_exp env sexp in
++            end_def ();
++            generalize_structure exp.exp_type;
++            let sch = exp.exp_type in
++            let exp = { exp with exp_type = instance env sch } in
++            (sch,exp)
++            in
++
++          let (schso, ifso) = scheme_exp env sifso in
++          let (schnot, ifnot) = scheme_exp env sifnot in
++          let _ = unify_exp_types_easy loc env ifso.exp_type ifnot.exp_type
++             (fun ppf (m1,m2,m3,m4) ->
++                Format.fprintf ppf
++                  "@[<v>The then-branch has type %a @,but the else-branch has type @,%a. @,\
++                    @[%s@, [%a] @,%s@, [%a].@,\
++                    @]%a\
++                    %a
++                   @]"
++                 format_type schso 
++                 format_type schnot
++                 "Cannot unify type" m1 () "with type" m2 () m3 () m4 ())
++            in
++          let _ = unify_exp_easy env ifso ty_expected  
++            (easy_report ~swap:true (fun pff () -> Format.fprintf pff "@,The branches of the conditional are required@, by the context@, to have type@,") (format_string "but they have type")) in
++          re {
++            exp_desc = Texp_ifthenelse(cond, ifso, Some ifnot);
++            exp_loc = loc; exp_extra = [];
++            exp_type = ifso.exp_type;
++            exp_attributes = sexp.pexp_attributes;
++            exp_env = env }
++      | Some sifnot (* when not !activate_easytype*) ->
+           let ifso = type_expect env sifso ty_expected in
+           let ifnot = type_expect env sifnot ty_expected in
+           (* Keep sharing *)
+@@ -2170,7 +2397,8 @@ and type_expect_ ?in_function env sexp ty_expected =
+             exp_env = env }
+       end
+   | Pexp_sequence(sexp1, sexp2) ->
+-      let exp1 = type_statement env sexp1 in
++      let exp1 = type_statement_easify ~force_easy:!Clflags.easy env sexp1 
++        (easy_report_so_but_string "This expression is followed by a semi-colon") in
+       let exp2 = type_expect env sexp2 ty_expected in
+       re {
+         exp_desc = Texp_sequence(exp1, exp2);
+@@ -2179,8 +2407,10 @@ and type_expect_ ?in_function env sexp ty_expected =
+         exp_attributes = sexp.pexp_attributes;
+         exp_env = env }
+   | Pexp_while(scond, sbody) ->
+-      let cond = type_expect env scond Predef.type_bool in
+-      let body = type_statement env sbody in
++      let cond = type_expect_easify env scond Predef.type_bool 
++        (easy_report_so_but_string "This expression is the condition of a while loop") in
++      let body = type_statement_easify ~force_easy:!Clflags.easy env sbody 
++        (easy_report_so_but_string "This expression is the body of a while loop") in
+       rue {
+         exp_desc = Texp_while(cond, body);
+         exp_loc = loc; exp_extra = [];
+@@ -2188,8 +2418,10 @@ and type_expect_ ?in_function env sexp ty_expected =
+         exp_attributes = sexp.pexp_attributes;
+         exp_env = env }
+   | Pexp_for(param, slow, shigh, dir, sbody) ->
+-      let low = type_expect env slow Predef.type_int in
+-      let high = type_expect env shigh Predef.type_int in
++      let low = type_expect_easify env slow Predef.type_int 
++        (easy_report_so_but_string "This expression is a for-loop start index") in
++      let high = type_expect_easify env shigh Predef.type_int
++        (easy_report_so_but_string "This expression is a for-loop stop index") in
+       let id, new_env =
+         match param.ppat_desc with
+         | Ppat_any -> Ident.create "_for", env
+@@ -2201,7 +2433,8 @@ and type_expect_ ?in_function env sexp ty_expected =
+         | _ ->
+             raise (Error (param.ppat_loc, env, Invalid_for_loop_index))
+       in
+-      let body = type_statement new_env sbody in
++      let body = type_statement_easify ~force_easy:!Clflags.easy new_env sbody 
++        (easy_report_so_but_string "This expression is the body of a for loop") in
+       rue {
+         exp_desc = Texp_for(id, param, low, high, dir, body);
+         exp_loc = loc; exp_extra = [];
+@@ -2272,7 +2505,7 @@ and type_expect_ ?in_function env sexp ty_expected =
+                   force (); force' ();
+                   if not gen then
+                     Location.prerr_warning loc
+-                      (Warnings.Not_principal "this ground coercion");
++                      (Warnings.Not_principal "This ground coercion");
+                 with Subtype (tr1, tr2) ->
+                   (* prerr_endline "coercion failed"; *)
+                   raise(Error(loc, env, Not_subtype(tr1, tr2)))
+@@ -2519,7 +2752,7 @@ and type_expect_ ?in_function env sexp ty_expected =
+         exp_attributes = sexp.pexp_attributes;
+         exp_env = env }
+   | Pexp_assert (e) ->
+-      let cond = type_expect env e Predef.type_bool in
++      let cond = type_expect_easify env e Predef.type_bool (easy_report_so_but_string "This expression is the condition of an assertion") in
+       let exp_type =
+         match cond.exp_desc with
+         | Texp_construct(_, {cstr_name="false"}, _) ->
+@@ -2710,7 +2943,7 @@ and type_function ?in_function loc attrs env ty_expected l caselist =
+     generalize_structure ty_res
+   end;
+   let cases, partial =
+-    type_cases ~in_function:(loc_fun,ty_fun) env ty_arg ty_res
++    type_cases_easify ~in_function:(loc_fun,ty_fun) env ty_arg ty_res
+       true loc caselist in
+   let not_function ty =
+     let ls, tvar = list_labels env ty in
+@@ -3123,6 +3356,296 @@ and type_argument env sarg ty_expected' ty_expected =
+       unify_exp env texp ty_expected;
+       texp
+ 
++and type_argument_easy env sarg targ ty_expected' ty_expected =
++  (* Note: copy paste should be factorize! *)
++  (* Note: made some simplifications by dropping the complicated labelled case *)
++  let no_labels ty =
++    let ls, tvar = list_labels env ty in
++    not tvar && List.for_all ((=) "") ls
++  in
++
++  let rec is_inferred sexp =
++    match sexp.pexp_desc with
++      Pexp_ident _ | Pexp_apply _ | Pexp_send _ | Pexp_field _ -> true
++    | Pexp_open (_, _, e) -> is_inferred e
++    | _ -> false
++  in
++  match expand_head env ty_expected' with
++  | {desc = Tarrow("",ty_arg,ty_res,_); level = lv} when is_inferred sarg ->
++    (*AC: need to generalize behavior *)
++      (* apply optional arguments when expected type is "" *)
++      (* we must be very careful about not breaking the semantics *)
++      if !Clflags.principal then begin_def ();
++      let texp = type_exp env sarg in
++      if !Clflags.principal then begin
++        end_def ();
++        generalize_structure texp.exp_type
++      end;
++      let rec make_args args ty_fun =
++        match (expand_head env ty_fun).desc with
++        | Tarrow (l,ty_arg,ty_fun,_) when is_optional l ->
++            let ty = option_none (instance env ty_arg) sarg.pexp_loc in
++            make_args ((l, Some ty, Optional) :: args) ty_fun
++        | Tarrow (l,_,ty_res',_) when l = "" || !Clflags.classic ->
++            args, ty_fun, no_labels ty_res'
++        | Tvar _ ->  args, ty_fun, false
++        |  _ -> [], texp.exp_type, false
++      in
++      let args, ty_fun', simple_res = make_args [] texp.exp_type in
++      let warn = !Clflags.principal &&
++        (lv <> generic_level || (repr ty_fun').level <> generic_level)
++      and texp = {texp with exp_type = instance env texp.exp_type}
++      and ty_fun = instance env ty_fun' in
++      if not (simple_res || no_labels ty_res) then begin
++        unify_exp env texp ty_expected;
++        texp
++      end else begin
++      unify_exp env {texp with exp_type = ty_fun} ty_expected;
++      if args = [] then texp else
++      (* eta-expand to avoid side effects *)
++      let var_pair name ty =
++        let id = Ident.create name in
++        {pat_desc = Tpat_var (id, mknoloc name); pat_type = ty;pat_extra=[];
++         pat_attributes = [];
++         pat_loc = Location.none; pat_env = env},
++        {exp_type = ty; exp_loc = Location.none; exp_env = env;
++         exp_extra = []; exp_attributes = [];
++         exp_desc =
++         Texp_ident(Path.Pident id, mknoloc (Longident.Lident name),
++                    {val_type = ty; val_kind = Val_reg;
++                     val_attributes = [];
++                     Types.val_loc = Location.none})}
++      in
++      let eta_pat, eta_var = var_pair "eta" ty_arg in
++      let func texp =
++        let e =
++          {texp with exp_type = ty_res; exp_desc =
++           Texp_apply
++             (texp,
++              List.rev args @ ["", Some eta_var, Required])}
++        in
++        { texp with exp_type = ty_fun; exp_desc =
++          Texp_function("", [case eta_pat e], Total) }
++      in
++      if warn then Location.prerr_warning texp.exp_loc
++          (Warnings.Without_principality "eliminated optional argument");
++      if is_nonexpansive texp then func texp else
++      (* let-expand to have side effects *)
++      let let_pat, let_var = var_pair "arg" texp.exp_type in
++      re { texp with exp_type = ty_fun; exp_desc =
++           Texp_let (Nonrecursive,
++                     [{vb_pat=let_pat; vb_expr=texp; vb_attributes=[];
++                       vb_loc=Location.none}],
++                     func let_var) }
++      end
++  | _ ->
++    unify_exp env targ ty_expected';
++    unify_exp env targ ty_expected;
++    targ
++
++(* Note: copy-pasted and only slightly modified *)
++
++and type_application_easy env funct sargs (targs:expression list) =
++  let uncons = function
++    | x::l -> (x,l)
++    | _ -> assert false
++    in
++
++  (* funct.exp_type may be generic *)
++  let result_type omitted ty_fun =
++    List.fold_left
++      (fun ty_fun (l,ty,lv) -> newty2 lv (Tarrow(l,ty,ty_fun,Cok)))
++      ty_fun omitted
++  in
++  let has_label l ty_fun =
++    let ls, tvar = list_labels env ty_fun in
++    tvar || List.mem l ls
++  in
++  let ignored = ref [] in
++  let rec type_unknown_args
++      (args :
++      (Asttypes.label * (unit -> Typedtree.expression) option *
++         Typedtree.optional) list)
++    omitted ty_fun sargs targs = 
++    match sargs with
++      [] ->
++        (List.map
++            (function l, None, x -> l, None, x
++                | l, Some f, x -> l, Some (f ()), x)
++           (List.rev args),
++         instance env (result_type omitted ty_fun))
++    | (l1, sarg1) :: sargl ->
++        let (targ1,targl) = uncons targs in
++        let (ty1, ty2) =
++          let ty_fun = expand_head env ty_fun in
++          match ty_fun.desc with
++            Tvar _ ->
++              let t1 = newvar () and t2 = newvar () in
++              let not_identity = function
++                  Texp_ident(_,_,{val_kind=Val_prim
++                                  {Primitive.prim_name="%identity"}}) ->
++                    false
++                | _ -> true
++              in
++              if ty_fun.level >= t1.level && not_identity funct.exp_desc then
++                Location.prerr_warning sarg1.pexp_loc Warnings.Unused_argument;
++              unify env ty_fun (newty (Tarrow(l1,t1,t2,Clink(ref Cunknown))));
++              (t1, t2)
++          | Tarrow (l,t1,t2,_) when l = l1
++            || !Clflags.classic && l1 = "" && not (is_optional l) ->
++              (t1, t2)
++          | td ->
++              let ty_fun =
++                match td with Tarrow _ -> newty td | _ -> ty_fun in
++              let ty_res = result_type (omitted @ !ignored) ty_fun in
++              match ty_res.desc with
++                Tarrow _ ->
++                  if (!Clflags.classic || not (has_label l1 ty_fun)) then
++                    raise (Error(sarg1.pexp_loc, env,
++                                 Apply_wrong_label(l1, ty_res)))
++                  else
++                    raise (Error(funct.exp_loc, env, Incoherent_label_order))
++              | _ ->
++                  raise(Error(funct.exp_loc, env, Apply_non_function
++                                (expand_head env funct.exp_type)))
++        in
++        let optional = if is_optional l1 then Optional else Required in
++        let arg1 () =
++          (*let arg1 = type_expect env sarg1 ty1 in*)
++          let arg1 = targ1 in
++          unify_exp env targ1 ty1;
++          if optional = Optional then
++            unify_exp env arg1 (type_option(newvar()));
++          arg1
++        in
++        type_unknown_args ((l1, Some arg1, optional) :: args) omitted ty2 sargl targl
++  in
++  let ignore_labels =
++    !Clflags.classic ||
++    begin
++      let ls, tvar = list_labels env funct.exp_type in
++      not tvar &&
++      let labels = List.filter (fun l -> not (is_optional l)) ls in
++      List.length labels = List.length sargs &&
++      List.for_all (fun (l,_) -> l = "") sargs &&
++      List.exists (fun l -> l <> "") labels &&
++      (Location.prerr_warning funct.exp_loc Warnings.Labels_omitted;
++       true)
++    end
++  in
++  let warned = ref false in
++  let rec type_args args omitted ty_fun ty_fun0 ty_old sargs targs more_sargs more_targs =
++    match expand_head env ty_fun, expand_head env ty_fun0 with
++      {desc=Tarrow (l, ty, ty_fun, com); level=lv} as ty_fun',
++      {desc=Tarrow (_, ty0, ty_fun0, _)}
++      when (sargs <> [] || more_sargs <> []) && commu_repr com = Cok ->
++        let may_warn loc w =
++          if not !warned && !Clflags.principal && lv <> generic_level
++          then begin
++            warned := true;
++            Location.prerr_warning loc w
++          end
++        in 
++        let name = label_name l
++        and optional = if is_optional l then Optional else Required in 
++        let sargs, (targs : expression list), more_sargs, (more_targs : expression list), arg =
++          if ignore_labels && not (is_optional l) then begin
++            (* In classic mode, omitted = [] *)
++            match sargs, more_sargs with
++              (l', sarg0) :: _, _ ->
++                raise(Error(sarg0.pexp_loc, env,
++                            Apply_wrong_label(l', ty_old)))
++            | _, (l', sarg0) :: more_sargs ->
++                let (targ0, more_targs) = uncons more_targs in
++                if l <> l' && l' <> "" then
++                  raise(Error(sarg0.pexp_loc, env,
++                              Apply_wrong_label(l', ty_fun')))
++                else
++                  ([], [], more_sargs, more_targs,
++                   Some (fun () -> type_argument_easy env sarg0 targ0 ty ty0))
++            | _ ->
++                assert false
++          end else 
++            try
++            let (l', sarg0, targ0, sargs, (targs:expression list), more_sargs, (more_targs:expression list)) =
++              try
++                let (l', sarg0, targ0, sargs1, targs1, sargs2, targs2) = extract_label_easy name sargs targs in
++                if sargs1 <> [] then
++                  may_warn sarg0.pexp_loc
++                    (Warnings.Not_principal "commuting this argument");
++                (l', sarg0, targ0, sargs1 @ sargs2, targs1 @ targs2, more_sargs, more_targs)
++              with Not_found ->
++                let (l', sarg0, targ0, sargs1, targs1, sargs2, targs2) =
++                   extract_label_easy name more_sargs more_targs in
++                if sargs1 <> [] || sargs <> [] then
++                  may_warn sarg0.pexp_loc
++                    (Warnings.Not_principal "commuting this argument");
++                (l', sarg0, targ0, sargs @ sargs1, targs @ targs1, sargs2, targs2)
++            in
++            if optional = Required && is_optional l' then
++              Location.prerr_warning sarg0.pexp_loc
++                (Warnings.Nonoptional_label l);
++            sargs, targs, more_sargs, more_targs,
++            if optional = Required || is_optional l' then
++              Some (fun () -> type_argument_easy env sarg0 targ0 ty ty0)
++            else begin
++              may_warn sarg0.pexp_loc
++                (Warnings.Not_principal "using an optional argument here");
++              Some (fun () -> option_some (type_argument_easy env sarg0 targ0
++                                             (extract_option_type env ty)
++                                             (extract_option_type env ty0)))
++            end
++          with Not_found ->
++            sargs, targs, more_sargs, more_targs,
++            if optional = Optional &&
++              (List.mem_assoc "" sargs || List.mem_assoc "" more_sargs)
++            then begin
++              may_warn funct.exp_loc
++                (Warnings.Without_principality "eliminated optional argument");
++              ignored := (l,ty,lv) :: !ignored;
++              Some (fun () -> option_none (instance env ty) Location.none)
++            end else begin
++              may_warn funct.exp_loc
++                (Warnings.Without_principality "commuted an argument");
++              None
++            end
++        in
++        let omitted =
++          if arg = None then (l,ty,lv) :: omitted else omitted in
++        let ty_old = if sargs = [] then ty_fun else ty_old in
++        type_args ((l,arg,optional)::args) omitted ty_fun ty_fun0
++          ty_old sargs targs more_sargs more_targs
++    | _ ->
++        match sargs with
++          (l, sarg0) :: _ when ignore_labels ->
++            raise(Error(sarg0.pexp_loc, env,
++                        Apply_wrong_label(l, ty_old)))
++        | _ ->
++            type_unknown_args args omitted ty_fun0
++              (sargs @ more_sargs) (targs @ more_targs)
++  in
++  match funct.exp_desc, sargs with
++    (* Special case for ignore: avoid discarding warning *)
++    Texp_ident (_, _, {val_kind=Val_prim{Primitive.prim_name="%ignore"}}),
++    ["", sarg] ->
++      let ty_arg, ty_res = filter_arrow env (instance env funct.exp_type) "" in
++      let exp = type_expect env sarg ty_arg in
++      begin match (expand_head env exp.exp_type).desc with
++      | Tarrow _ ->
++          Location.prerr_warning exp.exp_loc Warnings.Partial_application
++      | Tvar _ ->
++          add_delayed_check (fun () -> check_application_result env false exp)
++      | _ -> ()
++      end;
++      (["", Some exp, Required], ty_res)
++  | _ ->
++      let ty = funct.exp_type in
++      if ignore_labels then
++        type_args [] [] ty (instance env ty) ty [] [] sargs targs
++      else 
++        type_args [] [] ty (instance env ty) ty sargs targs [] []
++
++
+ and type_application env funct sargs =
+   (* funct.exp_type may be generic *)
+   let result_type omitted ty_fun =
+@@ -3395,6 +3918,135 @@ and type_statement env sexp =
+   unify_var env tv ty;
+   exp
+ 
++(* helper function for building error messages *)
++
++and easy_report ?(swap=false) msg1 msg2 : easy_reporter =
++  fun ppf (m1,m2,m3,m4) ->
++    let (m1,m2) = if swap then (m2,m1) else (m1,m2) in
++    Format.fprintf ppf (* AC: what are these: @;<1 2>*)
++      "@[<v>\
++        @[%a @,[%a]@ @,\
++          %a @,[%a].\
++        @]%a@,\
++        %a
++       @]"
++     msg1 () m1 () msg2 () m2 () m3 () m4 ()
++
++and format_string (s:string) =
++  fun pff () -> Format.fprintf pff "@,%s@," s
++
++(* AC: needed?
++and format_msg format =
++  fun pff () -> Format.fprintf pff format
++*)
++
++and easy_report_but msg : easy_reporter = 
++  easy_report ~swap:true msg (fun pff () -> Format.fprintf pff "@,but it has type@,")
++
++and easy_report_so_but msg : easy_reporter = 
++  easy_report_but (fun pff () -> Format.fprintf pff "%a,@, so it should have type@," msg ())
++
++and easy_report_so_but_string s : easy_reporter = 
++  easy_report_so_but (format_string s)
++
++and easy_report_but_string s : easy_reporter = 
++  easy_report_but (format_string s)
++
++and type_statement_easify ?(force_easy=false) env sexp report =
++  if !activate_easytype || force_easy
++    then type_statement_easy env sexp report
++    else type_statement env sexp
++
++and type_cases_easify ?in_function env ty_arg ty_res partial_flag loc caselist =
++  if !activate_easytype
++    then type_cases_easy ?in_function env ty_arg ty_res partial_flag loc caselist
++    else type_cases ?in_function env ty_arg ty_res partial_flag loc caselist
++
++and report_adding report msg_add = fun ppf msgs ->
++   report ppf msgs;
++   Format.fprintf ppf "%s\n" msg_add
++
++and type_statement_easy env sexp report =
++  (* --AC: would this be equivalent to 
++      "type_expect_predef_easy env sexp Predef.type_unit msg" ? *)
++  begin_def(); (*--AC: we don't need this, do we?*)
++  let exp = type_exp env sexp in
++  end_def();
++  let msg_add =  
++    let is_type_unit ty =
++      match (expand_head env ty).desc with
++      | Tconstr (p, _, _) when Path.same p Predef.path_unit -> true
++      | _ -> false
++      in
++    let exp_ty = expand_head env exp.exp_type in
++    let (ltys,ret_ty) = decompose_function_type env exp_ty in 
++    if not (is_type_unit ret_ty) then None else begin
++      match ltys with
++      | [] -> None (* was not a function *)
++      | [(l,ty)] when is_type_unit ty -> 
++          Some "You probably forgot to provide `()' as argument."
++      | [(l,ty)] -> 
++          Some "You probably forgot to provide an argument." 
++      | _ -> 
++          Some "You probably forgot to provide several arguments." 
++    end
++    in
++  let expected_ty = instance_def Predef.type_unit in
++  unify_exp_easy env exp expected_ty 
++    (fun ppf (m1,m2,m3,m4) -> report ppf (m1,m2,m3,
++      fun ppf () -> match msg_add with 
++        | Some m -> Format.fprintf ppf "@.%s" m; Printtyp.hack_to_display_message_at_the_right_place_easy := true
++        | None -> m4 ppf ()))
++    (*deprecated: (report_adding report msg_add)*)
++
++(* note: should call type_expect_easify with a ty_expected
++   that is a predefined type only if it is not polymorphic *)
++
++and type_expect_easify ?in_function env sexp ty_expected (report:easy_reporter) =
++  if !activate_easytype
++    then type_expect_predef_easy env sexp ty_expected report
++    else type_expect ?in_function env sexp ty_expected 
++
++and type_expect_predef_easy env sexp predef_expected report =
++  (* AC: not sure the following code is really making generalization/instances as it should *)
++  let exp = type_exp env sexp in
++  let expected_ty = instance_def predef_expected in
++  unify_exp_easy env exp expected_ty report
++
++(*--AC: probably need polymorphic recursion to typecheck 
++and unify_wrapper_easy report fct =
++  try 
++    fct()
++  with 
++  | Error (loc', env', Expr_type_clash(trace')) ->
++      raise (Error (loc', env', Expr_type_clash_easy(report,trace')))
++*)
++and unify_exp_types_easy loc env exp expected_ty report =
++(*
++  unify_wrapper_easy report (fun () ->
++    unify_exp_types loc env exp expected_ty)
++*)
++  try 
++    unify_exp_types loc env exp expected_ty
++  with 
++  | Error (loc', env', Expr_type_clash(trace')) ->
++      raise (Error (loc', env', Expr_type_clash_easy(report,trace')))
++
++and unify_exp_easy env exp expected_ty report =
++(*
++  unify_wrapper_easy report (fun () ->
++    unify_exp env exp expected_ty; 
++    exp)
++*)
++  try 
++    unify_exp env exp expected_ty; 
++    exp
++  with 
++  | Error (loc', env', Expr_type_clash(trace')) ->
++      raise (Error (loc', env', Expr_type_clash_easy(report,trace')))
++
++
++
+ (* Typing of match cases *)
+ 
+ and type_cases ?in_function env ty_arg ty_res partial_flag loc caselist =
+@@ -3530,6 +4182,177 @@ and type_cases ?in_function env ty_arg ty_res partial_flag loc caselist =
+   end;
+   cases, partial
+ 
++
++
++and type_cases_easy ?in_function env ty_arg ty_res partial_flag loc caselist =
++  (* ty_arg is _fully_ generalized *)
++  let patterns = List.map (fun {pc_lhs=p} -> p) caselist in
++  let erase_either =
++    List.exists contains_polymorphic_variant patterns
++    && contains_variant_either ty_arg
++  and has_gadts = List.exists (contains_gadt env) patterns in
++(*  prerr_endline ( if has_gadts then "contains gadt" else "no gadt"); *)
++  let ty_arg =
++    if (has_gadts || erase_either) && not !Clflags.principal
++    then correct_levels ty_arg else ty_arg
++  and ty_res, env =
++    if has_gadts && not !Clflags.principal then
++      correct_levels ty_res, duplicate_ident_types loc caselist env
++    else ty_res, env
++  in
++  let lev, env =
++    if has_gadts then begin
++      (* raise level for existentials *)
++      begin_def ();
++      Ident.set_current_time (get_current_level ());
++      let lev = Ident.current_time () in
++      Ctype.init_def (lev+1000);                 (* up to 1000 existentials *)
++      (lev, Env.add_gadt_instance_level lev env)
++    end else (get_current_level (), env)
++  in
++(*  if has_gadts then
++    Format.printf "lev = %d@.%a@." lev Printtyp.raw_type_expr ty_res; *)
++  begin_def (); (* propagation of the argument *)
++  let ty_arg' = newvar () in
++  let pattern_force = ref [] in
++(*  Format.printf "@[%i %i@ %a@]@." lev (get_current_level())
++    Printtyp.raw_type_expr ty_arg; *)
++  let pat_env_list =
++    List.map
++      (fun {pc_lhs; pc_guard; pc_rhs} ->
++        let loc =
++          let open Location in
++          match pc_guard with
++          | None -> pc_rhs.pexp_loc
++          | Some g -> {pc_rhs.pexp_loc with loc_start=g.pexp_loc.loc_start}
++        in
++        if !Clflags.principal then begin_def (); (* propagation of pattern *)
++        let scope = Some (Annot.Idef loc) in
++        let (pat, ext_env, force, unpacks) =
++          let partial =
++            if !Clflags.principal || erase_either
++            then Some false else None in
++          let ty_arg = instance ?partial env ty_arg in
++          type_pattern ~lev env pc_lhs scope ty_arg
++        in
++        pattern_force := force @ !pattern_force;
++        let pat =
++          if !Clflags.principal then begin
++            end_def ();
++            iter_pattern (fun {pat_type=t} -> generalize_structure t) pat;
++            { pat with pat_type = instance env pat.pat_type }
++          end else pat
++        in
++        (pat, (ext_env, unpacks)))
++      caselist in
++  (* Unify cases (delayed to keep it order-free) *)
++  let patl = List.map fst pat_env_list in
++  List.iter (fun pat -> unify_pat env pat ty_arg') patl;
++  (* Check for polymorphic variants to close *)
++  if List.exists has_variants patl then begin
++    Parmatch.pressure_variants env patl;
++    List.iter (iter_pattern finalize_variant) patl
++  end;
++  (* `Contaminating' unifications start here *)
++  List.iter (fun f -> f()) !pattern_force;
++  (* Post-processing and generalization *)
++  List.iter (iter_pattern (fun {pat_type=t} -> unify_var env t (newvar())))
++    patl;
++  List.iter (fun pat -> unify_pat env pat (instance env ty_arg)) patl;
++  end_def ();
++  List.iter (iter_pattern (fun {pat_type=t} -> generalize t)) patl;
++  (* type bodies *)
++  let in_function = if List.length caselist = 1 then in_function else None in
++  let cases =
++    if not !activate_easytype then begin
++      List.map2
++        (fun (pat, (ext_env, unpacks)) {pc_lhs; pc_guard; pc_rhs} ->
++          let sexp = wrap_unpacks pc_rhs unpacks in
++          let ty_res' =
++            if !Clflags.principal then begin
++              begin_def ();
++              let ty = instance ~partial:true env ty_res in
++              end_def ();
++              generalize_structure ty; ty
++            end
++            else if contains_gadt env pc_lhs then correct_levels ty_res
++            else ty_res in
++  (*        Format.printf "@[%i %i, ty_res' =@ %a@]@." lev (get_current_level())
++            Printtyp.raw_type_expr ty_res'; *)
++          let guard =
++            match pc_guard with
++            | None -> None
++            | Some scond ->
++                Some
++                  (type_expect ext_env (wrap_unpacks scond unpacks)
++                     Predef.type_bool)
++          in
++          let exp = type_expect ?in_function ext_env sexp ty_res' in
++          {
++           c_lhs = pat;
++           c_guard = guard;
++           c_rhs = {exp with exp_type = instance env ty_res'}
++          }
++        )
++        pat_env_list caselist
++     end else begin
++        (* Note: some copy-paste from above;
++           Disclaimer: behavior with GADTs might be broken *)
++        let cases = List.map2
++          (fun (pat, (ext_env, unpacks)) {pc_lhs; pc_guard; pc_rhs} ->
++            let sexp = wrap_unpacks pc_rhs unpacks in
++            let guard =
++              match pc_guard with
++              | None -> None
++              | Some scond ->
++                  Some
++                    (type_expect_easify ext_env (wrap_unpacks scond unpacks)
++                       Predef.type_bool
++                      (easy_report_so_but_string "this expression is a when-clause condition"))
++            in
++            let exp = type_exp ext_env sexp in
++            {
++             c_lhs = pat;
++             c_guard = guard;
++             c_rhs = exp;
++            }
++          )
++          pat_env_list caselist
++          in
++        if cases <> [] then begin
++          let first_branch = (List.hd cases).c_rhs in
++          List.iter (fun c ->
++            ignore (unify_exp_easy env c.c_rhs first_branch.exp_type  
++              (easy_report ~swap:true (format_string "the previous branches produce values of type") (format_string "but this branch has type")))
++            ) cases;
++          ignore (unify_exp_easy env first_branch ty_res  
++            (easy_report ~swap:true (format_string "the branches of the matching are required by the context to produce values of type") (format_string "but they have type")))
++        end;
++        cases
++     end
++  in
++  if !Clflags.principal || has_gadts then begin
++    let ty_res' = instance env ty_res in
++    List.iter (fun c -> unify_exp env c.c_rhs ty_res') cases 
++  end;
++  let partial =
++    if partial_flag then
++      Parmatch.check_partial_gadt (partial_pred ~lev env ty_arg) loc cases
++    else
++      Partial
++  in
++  add_delayed_check
++    (fun () ->
++      List.iter (fun (pat, (env, _)) -> check_absent_variant env pat)
++        pat_env_list;
++      Parmatch.check_unused env cases);
++  if has_gadts then begin
++    end_def ();
++    (* Ensure that existential types do not escape *)
++    unify_exp_types loc env (instance env ty_res) (newvar ()) ;
++  end;
++  cases, partial
++
+ (* Typing of let bindings *)
+ 
+ and type_let ?(check = fun s -> Warnings.Unused_var s)
+@@ -3565,9 +4388,16 @@ and type_let ?(check = fun s -> Warnings.Unused_var s)
+         | _ -> spat)
+       spat_sexp_list in
+   let nvs = List.map (fun _ -> newvar ()) spatl in
+-  let (pat_list, new_env, force, unpacks) =
++  let (pat_list, new_env, force, unpacks, pv) =
+     type_pattern_list env spatl scope nvs allow in
+   let is_recursive = (rec_flag = Recursive) in
++
++  (* Prepare a ghost environment for finding missing "rec" keywords *)
++  let ghost_env = 
++    if !activate_easytype && not is_recursive 
++      then Some (fst (add_pattern_variables_ghost_easy env pv))
++      else None in
++
+   (* If recursive, first unify with an approximation of the expression *)
+   if is_recursive then
+     List.iter2
+@@ -3601,7 +4431,10 @@ and type_let ?(check = fun s -> Warnings.Unused_var s)
+   (* Only bind pattern variables after generalizing *)
+   List.iter (fun f -> f()) force;
+   let exp_env =
+-    if is_recursive then new_env else env in
++    if is_recursive then new_env
++    else if !activate_easytype && not is_recursive then 
++      (match ghost_env with Some env' -> env' | _ -> assert false)
++    else env in
+ 
+   let current_slot = ref None in
+   let rec_needed = ref false in
+@@ -3752,7 +4585,7 @@ let type_expression env sexp =
+ open Format
+ open Printtyp
+ 
+-let report_error env ppf = function
++let rec report_error env ppf = function
+   | Polymorphic_label lid ->
+       fprintf ppf "@[The record field %a is polymorphic.@ %s@]"
+         longident lid "You cannot instantiate it in a pattern."
+@@ -3785,6 +4618,48 @@ let report_error env ppf = function
+   | Orpat_vars id ->
+       fprintf ppf "Variable %s must occur on both sides of this | pattern"
+         (Ident.name id)
++  | Expr_type_clash_easy (report, trace) ->
++      let ms = get_unification_error_easy env trace in
++      report ppf ms
++  | Apply_error_easy (explain, loc, Expr_type_clash trace) ->
++      let (m1,m2,m3,m4) = get_unification_error_easy env trace in
++      explain ppf;
++      let (m4a_call,m4b) = 
++        if !Printtyp.hack_to_display_message_at_the_right_place_easy 
++          then ((fun () -> fprintf ppf "%a@." m4 ()), format_string "")
++          else ((fun () -> ()), m4)
++        in
++      m4a_call();
++      if show_original_error_after_easy then begin
++        Format.fprintf ppf "----@.";
++        Location.print_error ppf loc;
++        let msg1 = "This expression has type" in
++        let msg2 = "but an expression was expected of type" in
++        Format.fprintf ppf
++          "@[<v>\
++            @[%s@;<1 2>[%a]@ \
++              %s@;<1 2>[%a].\
++            @]%a \
++            %a \
++           @]"
++         msg1 m1 () msg2 m2 () m3 () m4b ()
++      end
++  | Apply_error_easy (explain, loc, Apply_non_function typ) ->
++      explain ppf;
++      (* Note: some copy-paste from code further below *)
++      reset_and_mark_loops typ;
++      begin match (repr typ).desc with
++        Tarrow _ ->
++          fprintf ppf "@[Maybe you forgot a `;' @]"
++      | _ -> ()
++      end
++  | Apply_error_easy (explain, loc, original_error) ->
++      explain ppf;
++      if show_original_error_after_easy then begin
++        fprintf ppf "@\n";
++        Location.print_error ppf loc;
++        report_error env ppf original_error
++      end
+   | Expr_type_clash trace ->
+       report_unification_error ppf env trace
+         (function ppf ->
+@@ -3797,6 +4672,7 @@ let report_error env ppf = function
+         Tarrow _ ->
+           fprintf ppf "@[<v>@[<2>This function has type@ %a@]"
+             type_expr typ;
++            (* AC: shouldn't this "@ " be a "@[" ? *)
+           fprintf ppf "@ @[It is applied to too many arguments;@ %s@]@]"
+                       "maybe you forgot a `;'."
+       | _ ->
+@@ -3978,3 +4854,12 @@ let () =
+ 
+ let () =
+   Env.add_delayed_check_forward := add_delayed_check
++
++
++(* TODO:
++
++- pattern compatibility / match branches compatibility
++- format string 
++- fix gadts in pattern matching and applications
++- test open module
++*)
+diff --git a/typing/typecore.mli b/typing/typecore.mli
+index 4ce6b1f..e6a6516 100644
+--- a/typing/typecore.mli
++++ b/typing/typecore.mli
+@@ -62,6 +62,9 @@ val force_delayed_checks: unit -> unit
+ 
+ val self_coercion : (Path.t * Location.t list ref) list ref
+ 
++type easy_error_piece = Printtyp.easy_error_piece
++type easy_reporter = Format.formatter -> (easy_error_piece * easy_error_piece * easy_error_piece * easy_error_piece) -> unit
++
+ type error =
+     Polymorphic_label of Longident.t
+   | Constructor_arity_mismatch of Longident.t * int * int
+@@ -71,6 +74,8 @@ type error =
+   | Multiply_bound_variable of string
+   | Orpat_vars of Ident.t
+   | Expr_type_clash of (type_expr * type_expr) list
++  | Expr_type_clash_easy of easy_reporter * (type_expr * type_expr) list
++  | Apply_error_easy of (Format.formatter -> unit) * Location.t * error
+   | Apply_non_function of type_expr
+   | Apply_wrong_label of label * type_expr
+   | Label_multiply_defined of string
+diff --git a/typing/typemod.ml b/typing/typemod.ml
+index a053d53..6d9cfc3 100644
+--- a/typing/typemod.ml
++++ b/typing/typemod.ml
+@@ -43,6 +43,14 @@ type error =
+ exception Error of Location.t * Env.t * error
+ exception Error_forward of Location.error
+ 
++(* Wrapper for making a new call with Ctype.activate_easytype := true
++  in case the first call ends on a typing error *)
++let wrap_typing_easy fct =
++  try fct()
++  with (Typecore.Error _ | Typetexp.Error _) when !Clflags.easy ->
++    Ctype.activate_easytype := true;
++    fct()
++
+ open Typedtree
+ 
+ let fst3 (x,_,_) = x
+@@ -1166,7 +1174,7 @@ let rec type_module ?(alias=false) sttn funct_body anchor env smod =
+ 
+   | Pmod_unpack sexp ->
+       if !Clflags.principal then Ctype.begin_def ();
+-      let exp = Typecore.type_exp env sexp in
++      let exp = wrap_typing_easy (fun () -> Typecore.type_exp env sexp) in
+       if !Clflags.principal then begin
+         Ctype.end_def ();
+         Ctype.generalize_structure exp.exp_type
+@@ -1207,7 +1215,7 @@ and type_structure ?(toplevel = false) funct_body anchor env sstr scope =
+   let type_str_item env srem {pstr_loc = loc; pstr_desc = desc} =
+     match desc with
+     | Pstr_eval (sexpr, attrs) ->
+-        let expr = Typecore.type_expression env sexpr in
++        let expr = wrap_typing_easy (fun () -> Typecore.type_expression env sexpr) in
+         Tstr_eval (expr, attrs), [], env
+     | Pstr_value(rec_flag, sdefs) ->
+         let scope =
+@@ -1224,7 +1232,7 @@ and type_structure ?(toplevel = false) funct_body anchor env sstr scope =
+               Some (Annot.Idef {scope with Location.loc_start = start})
+         in
+         let (defs, newenv) =
+-          Typecore.type_binding env rec_flag sdefs scope in
++          wrap_typing_easy (fun () -> Typecore.type_binding env rec_flag sdefs scope) in
+         (* Note: Env.find_value does not trigger the value_used event. Values
+            will be marked as being used during the signature inclusion test. *)
+         Tstr_value(rec_flag, defs),
+diff --git a/typing/typetexp.ml b/typing/typetexp.ml
+index 523d435..f34608e 100644
+--- a/typing/typetexp.ml
++++ b/typing/typetexp.ml
+@@ -43,6 +43,7 @@ type error =
+   | Multiple_constraints_on_type of Longident.t
+   | Repeated_method_label of string
+   | Unbound_value of Longident.t
++  | Unbound_value_missing_rec_easy of Longident.t * Location.t
+   | Unbound_constructor of Longident.t
+   | Unbound_label of Longident.t
+   | Unbound_module of Longident.t
+@@ -978,6 +979,10 @@ let report_error env ppf = function
+   | Unbound_value lid ->
+       fprintf ppf "Unbound value %a" longident lid;
+       spellcheck ppf Env.fold_values env lid;
++  | Unbound_value_missing_rec_easy (lid, loc) ->
++      fprintf ppf "Unbound value %a.\n" longident lid;
++      let (_, line, _) = Location.get_pos_info loc.Location.loc_start in
++      fprintf ppf "@.You are probably missing the `rec' keyword on line %i." line;
+   | Unbound_module lid ->
+       fprintf ppf "Unbound module %a" longident lid;
+       spellcheck ppf Env.fold_modules env lid;
+diff --git a/typing/typetexp.mli b/typing/typetexp.mli
+index 7bff403..8c8d7d8 100644
+--- a/typing/typetexp.mli
++++ b/typing/typetexp.mli
+@@ -55,6 +55,7 @@ type error =
+   | Multiple_constraints_on_type of Longident.t
+   | Repeated_method_label of string
+   | Unbound_value of Longident.t
++  | Unbound_value_missing_rec_easy of Longident.t * Location.t
+   | Unbound_constructor of Longident.t
+   | Unbound_label of Longident.t
+   | Unbound_module of Longident.t
+diff --git a/utils/clflags.ml b/utils/clflags.ml
+index 57834cc..0f557a7 100644
+--- a/utils/clflags.ml
++++ b/utils/clflags.ml
+@@ -110,3 +110,4 @@ let runtime_variant = ref "";;      (* -runtime-variant *)
+ 
+ let keep_locs = ref false              (* -keep-locs *)
+ let unsafe_string = ref true;;         (* -safe-string / -unsafe-string *)
++let easy = ref false               (* -easytype *)
+diff --git a/utils/clflags.mli b/utils/clflags.mli
+index 7e51cf3..b6a51c1 100644
+--- a/utils/clflags.mli
++++ b/utils/clflags.mli
+@@ -94,3 +94,4 @@ val force_slash : bool ref
+ val keep_locs : bool ref
+ val unsafe_string : bool ref
+ val opaque : bool ref
++val easy : bool ref
